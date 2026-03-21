@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import userModel from "../model/user.model.js";
 import jwt from "jsonwebtoken";
 import { protect } from '../middleware/auth.js';
-
+import "dotenv/config"
 
 // ✅ REGISTER
 export async function register(req, res) {
@@ -58,19 +58,33 @@ export async function login(req, res) {
     }
 
     // ✅ Simple JWT (no refresh token)
-    const token = jwt.sign(
+    // now her will be access token Okay the access cheque on time limit will be 15 minute
+    // and the refresh token time limit will be a long day it can be co like a seven day to 15 day as far we can go through it
+    const acessToken = jwt.sign(
         { id: user._id },
         process.env.JWT_SECRET,
-        { expiresIn: "1d" }
+        { expiresIn: "15m" }
     );
-
+    const refreshToken = jwt.sign(
+        { id: user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+    );
+    res.cookie("refreshToken", refreshToken, {
+        // httpsONly means client side script can not access this cookie
+        httpOnly: true,
+        secure: true,
+        sameSite: "strict",
+        // maxAge means the cookie will expire in 7 days
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    })
     res.status(200).json({
         message: "Logged in successfully",
         user: {
             username: user.username,
             email: user.email
         },
-        token
+        acessToken
     });
 }
 
@@ -89,7 +103,53 @@ export const getMe = [protect, async (req, res) => {
 
 // Stub implementations for missing routes
 export const refreshToken = (req, res) => {
-    res.status(501).json({ message: 'Refresh token not implemented' });
+    try {
+        const { refreshToken } = req.cookies;
+
+        if (!refreshToken) {
+            return res.status(401).json({
+                message: "Refresh token is required"
+            });
+        }
+
+        // ✅ verify token
+        const decoded = jwt.verify(
+            refreshToken,
+            process.env.JWT_SECRET
+        );
+
+        // ✅ create new access token
+        const accessToken = jwt.sign(
+            { id: decoded.id },
+            process.env.JWT_SECRET,
+            { expiresIn: "15m" }
+        );
+
+        // ✅ create new refresh token (rotation)
+        const newRefreshToken = jwt.sign(
+            { id: decoded.id },
+            process.env.JWT_SECRET,
+            { expiresIn: "7d" }
+        );
+
+        // ✅ set cookie properly
+        res.cookie("refreshToken", newRefreshToken, {
+            httpOnly: true,
+            secure: true,       // use false in localhost
+            sameSite: "strict",
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+
+        return res.status(200).json({
+            message: "Token refreshed",
+            accessToken
+        });
+
+    } catch (error) {
+        return res.status(401).json({
+            message: "Invalid or expired refresh token"
+        });
+    }
 };
 
 export const logout = (req, res) => {
