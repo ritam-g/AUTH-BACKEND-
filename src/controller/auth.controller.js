@@ -79,7 +79,7 @@ export async function login(req, res) {
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
-
+    
     if (!isMatch) {
         return res.status(401).json({
             message: "Invalid email or password"
@@ -102,9 +102,10 @@ export async function login(req, res) {
 
     const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
-    // 🚀 Prevent Session Bloat: Delete any old sessions for this user before creating a new one.
-    // This ensures only 1 active session exists per user at a time.
-    await sessionModel.deleteMany({ user: user._id });
+    // 🚀 Multi-device support: We no longer delete all sessions. 
+    // Instead, we only clean up old "rovoked" sessions or expired ones to keep the DB tidy
+    // but allow the user to be logged in on multiple browsers/phones simultaneously.
+    await sessionModel.deleteMany({ user: user._id, rovoked: true });
 
     await sessionModel.create({
         user: user._id,
@@ -235,6 +236,26 @@ export const logout = async (req, res) => {
     res.status(200).json({ message: 'Logout successful' });
 };
 
-export const logoutAll = (req, res) => {
-    res.status(501).json({ message: 'Logout all not implemented' });
+export const logoutAll = async(req, res) => {
+    //todo make proepr comment her 
+    // ✅ find session
+    const {refreshToken}=req.cookies
+    if(!refreshToken){
+        return res.status(401).json({ message: 'Refresh token is required' });
+    }
+    //   ✅ hash refresh token
+    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    // ✅ find session
+    const session = await sessionModel.findOneAndUpdate(
+        { refreshTokenHash }, 
+        { rovoked: true }
+    );
+    // ✅ if session not found
+    if (!session) {
+        return res.status(401).json({ message: 'Session not found' });
+    }
+    // ✅ clear cookie
+    res.clearCookie('refreshToken');
+    // ✅ send response
+    res.status(200).json({ message: 'Logout successful' });
 }
