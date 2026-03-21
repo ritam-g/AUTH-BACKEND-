@@ -103,9 +103,9 @@ export async function login(req, res) {
     const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
     // 🚀 Multi-device support: We no longer delete all sessions. 
-    // Instead, we only clean up old "rovoked" sessions or expired ones to keep the DB tidy
+    // Instead, we only clean up old "revoked" sessions or expired ones to keep the DB tidy
     // but allow the user to be logged in on multiple browsers/phones simultaneously.
-    await sessionModel.deleteMany({ user: user._id, rovoked: true });
+    await sessionModel.deleteMany({ user: user._id, revoked: true });
 
     await sessionModel.create({
         user: user._id,
@@ -161,7 +161,7 @@ export const refreshToken = async (req, res) => {
         const session = await sessionModel.findOne(
             {
                 refreshTokenHash: refreshTokenHash,
-                rovoked: false
+                revoked: false
             }
         )
         // ✅ if session not found
@@ -226,7 +226,7 @@ export const logout = async (req, res) => {
 
     const session = await sessionModel.findOneAndUpdate(
         { refreshTokenHash }, 
-        { rovoked: true }
+        { revoked: true }
     );
     if (!session) {
         return res.status(401).json({ message: 'Session not found' });
@@ -236,26 +236,34 @@ export const logout = async (req, res) => {
     res.status(200).json({ message: 'Logout successful' });
 };
 
-export const logoutAll = async(req, res) => {
-    //todo make proepr comment her 
-    // ✅ find session
-    const {refreshToken}=req.cookies
-    if(!refreshToken){
-        return res.status(401).json({ message: 'Refresh token is required' });
+export const logoutAll = async (req, res) => {
+    try {
+        const { refreshToken } = req.cookies;
+
+        if (!refreshToken) {
+            return res.status(401).json({ message: "Refresh token is required" });
+        }
+
+        // ✅ Verify the token to get the user ID
+        const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+
+        // ✅ Mark ALL sessions for this user as revoked
+        const result = await sessionModel.updateMany(
+            { user: decoded.id },
+            { revoked: true }
+        );
+
+        // ✅ Clear the cookie
+        res.clearCookie("refreshToken");
+
+        // ✅ Send response
+        res.status(200).json({
+            message: "Logged out from all devices successfully",
+            revokedSessionsCount: result.modifiedCount
+        });
+
+    } catch (error) {
+        console.error("Logout All Error:", error);
+        return res.status(401).json({ message: "Invalid or expired token" });
     }
-    //   ✅ hash refresh token
-    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-    // ✅ find session
-    const session = await sessionModel.findOneAndUpdate(
-        { refreshTokenHash }, 
-        { rovoked: true }
-    );
-    // ✅ if session not found
-    if (!session) {
-        return res.status(401).json({ message: 'Session not found' });
-    }
-    // ✅ clear cookie
-    res.clearCookie('refreshToken');
-    // ✅ send response
-    res.status(200).json({ message: 'Logout successful' });
-}
+};

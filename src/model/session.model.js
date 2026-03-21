@@ -10,10 +10,10 @@ const sessionSchema=new mongoose.Schema({
         type:String,
         required:true
     },
-    rovoked:{
-        type:Boolean,
-        enum:[true,false],
-        default:false
+    revoked: {
+        type: Boolean,
+        enum: [true, false],
+        default: false
     },
     ip:{
         type:String,
