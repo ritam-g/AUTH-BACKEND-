@@ -11,13 +11,9 @@ router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", authController.logout);
 router.post("/logout-all", authController.logoutAll);
 
-// Simple email route requested by user
-router.post("/email", (req, res) => {
-    const { email } = req.body;
-    if (!email) {
-        return res.status(400).json({ message: "Email is required" });
-    }
-    res.status(200).json({ message: "Email route working successfully", email });
-});
+// Route to test email functionality
+router.post("/email", authController.sendTestEmail);
+
+router.get("/verify-email", authController.verifyEmail);
 
 export default router;

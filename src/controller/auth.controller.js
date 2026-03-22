@@ -5,6 +5,9 @@ import { protect } from '../middleware/auth.js';
 import "dotenv/config"
 import sessionModel from '../model/session.model.js';
 import crypto from 'crypto';
+import sendEmail from '../services/mail.service.js';
+import { generateOtp, genrateHtmlOtp } from '../utils/utils.js';
+import otpModel from '../model/otp.model.js';
 
 /**
  * AUTH CONTROLLER
@@ -48,45 +51,31 @@ export async function register(req, res) {
         email,
         password: hashedPassword // Save hashed password, NEVER the plain text (Security Rule #1)
     });
-    // ✅ Create Refresh Token (Long lived - used to keep user logged in across browser restarts)
-    const refreshToken = jwt.sign(
-        { id: user._id },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-    );
-    // Hash the refresh token for DB storage (Security: Storing hashes prevents token theft if DB is leaked)
-    const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex'); // Later used in 'refreshToken' function to verify session
 
-    // Create a session in the DB to track this specific device/browser
-    const session = await sessionModel.create({
-        user: user._id, // Links this session record to the newly registered user
-        refreshTokenHash, // Store the HASH, not the raw token (Security measure)
-        ip: req.ip, // Store IP to help user identify suspicious logins
-        userAgent: req.headers["user-agent"] // Store browser info so user knows which device this is
+
+    // now genrate otp then html of otp then save in model then send mail 
+    const otp=generateOtp()
+
+    const htmlOtp=genrateHtmlOtp(otp,email)
+
+
+    
+
+    await otpModel.create({
+        user:user._id,
+        otp,
+        email
     })
 
-    // ✅ Create Access Token (Short lived - sent with every API data request)
-    const acessToken = jwt.sign(
-        { id: user._id, sessionId: session._id }, // Include sessionId to link this token to its DB session entry
-        process.env.JWT_SECRET,
-        { expiresIn: "15m" } // 15 mins expiry ensures that if stolen, the token is soon useless
-    );
+    await sendEmail(email,"OTP Verification",`Your OTP is ${otp}`,htmlOtp)
 
-    // ✅ Set Refresh Token in an HttpOnly Cookie
-    res.cookie("refreshToken", refreshToken, {
-        httpOnly: true, // Crucial: Prevents hackers from stealing the token via Javascript (XSS protection)
-        secure: true, // Crucial: Ensures token is only sent over encrypted HTTPS connections
-        sameSite: "strict", // Crucial: Prevents "Cross-Site Request Forgery" (CSRF) attacks
-        maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days (Matches the 'expiresIn' setting used at line 55)
-    })
 
     res.status(201).json({
         message: "User registered successfully",
         user: {
             username: user.username,
             email: user.email
-        },
-        acessToken
+        }
     });
 }
 
@@ -106,6 +95,11 @@ export async function login(req, res) {
     if (!user) {
         return res.status(401).json({
             message: "Invalid email or password"
+        });
+    }
+    if(!user.verified){
+        return res.status(401).json({
+            message: "User is not verified"
         });
     }
 
@@ -319,3 +313,106 @@ export const logoutAll = async (req, res) => {
         return res.status(401).json({ message: "Invalid or expired token" });
     }
 };
+
+/**
+ * ✅ SEND TEST EMAIL
+ * Purpose: Allows testing the email service functionality.
+ */
+export const sendTestEmail = async (req, res) => {
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+    }
+
+    try {
+        await sendEmail(
+            email,
+            "Test Email - Auth Backend",
+            "This is a test email to verify that your Node.js backend can send emails successfully.",
+            "<h1>Test Email</h1><p>Your <b>Node.js Auth Backend</b> is now capable of sending emails!</p>"
+        );
+
+        res.status(200).json({
+            message: "Test email sent successfully to " + email
+        });
+    } catch (error) {
+        console.error("Email Controller Error:", error);
+        res.status(500).json({
+            message: "Failed to send email",
+            error: error.message
+        });
+    }
+};
+
+
+
+export async function verifyEmail(req, res) {
+    try {
+        const { email, otp } = req.query;
+
+        // 1. Basic validation
+        if (!email || !otp) {
+            return res.status(400).json({
+                message: "Email and OTP are required"
+            });
+        }
+
+        // 2. Find OTP record
+        const otpRecord = await otpModel.findOne({ email });
+
+        if (!otpRecord) {
+            return res.status(400).json({
+                message: "OTP not found or expired"
+            });
+        }
+
+        // 3. Check OTP match
+        if (otpRecord.otp !== otp) {
+            return res.status(400).json({
+                message: "Invalid OTP"
+            });
+        }
+
+        // 4. (OPTIONAL but IMPORTANT) Check expiry
+        const isExpired = (Date.now() - otpRecord.createdAt) > 10 * 60 * 1000;
+
+        if (isExpired) {
+            await otpModel.deleteOne({ _id: otpRecord._id });
+
+            return res.status(400).json({
+                message: "OTP expired"
+            });
+        }
+
+        // 5. Find user
+        const user = await userModel.findOne({ email });
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found"
+            });
+        }
+
+        // 6. Mark as verified
+        user.verified = true;
+        await user.save();
+
+        // 7. Delete OTP after success (VERY IMPORTANT)
+        // explain why 
+        // because if we don't delete the otp then the user can login again and again with the same otp
+        // and also it will create a lot of junk data in our database
+        await otpModel.deleteOne({ _id: otpRecord._id });
+
+        return res.status(200).send(`
+            <h2>Email Verified Successfully ✅</h2>
+            <p>You can now login.</p>
+        `);
+
+    } catch (error) {
+        console.error("Verify Email Error:", error);
+        return res.status(500).json({
+            message: "Something went wrong"
+        });
+    }
+}
